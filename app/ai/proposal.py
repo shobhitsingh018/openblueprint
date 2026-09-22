@@ -1,9 +1,16 @@
-from typing import Any
+from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
 class DesignProposal(BaseModel):
     summary: str
+
+    status: Literal[
+        "PROPOSED",
+        "APPROVED",
+        "REJECTED",
+        "APPLIED",
+    ] = "PROPOSED"
 
     requirements: list[dict[str, Any]] = Field(default_factory=list)
     systems: list[dict[str, Any]] = Field(default_factory=list)
