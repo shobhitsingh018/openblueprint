@@ -27,6 +27,13 @@ if __name__ == "__main__":
     design = Design(
         id="demo-001",
         name="Smart Environmental Monitor",
+        requirements=[
+            {
+                "id": "req-001",
+                "type": "functional",
+                "description": "Measure temperature and humidity",
+            }
+        ],
         systems=[
             {
                 "id": "sys-001",
@@ -37,10 +44,14 @@ if __name__ == "__main__":
             {
                 "id": "comp-001",
                 "name": "Temperature Sensor",
+                "category": "sensor",
                 "interfaces": [
                     {
                         "id": "if-001",
                         "name": "I2C",
+                        "type": "I2C",
+                        "voltage_min": 3.0,
+                        "voltage_max": 3.6,
                     }
                 ],
             }
@@ -51,11 +62,10 @@ if __name__ == "__main__":
                 "name": "Sensor to Controller",
                 "source": "sensor-i2c",
                 "target": "controller-i2c",
+                "interface_type": "I2C",
             }
         ],
     )
 
-    results = validate_design(design)
-
-    for result in results:
+    for result in validate_design(design):
         print(result)
