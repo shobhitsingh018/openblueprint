@@ -37,12 +37,25 @@ def rule_connections_reference_endpoints(design: dict[str, Any]) -> ValidationRe
     connections = design.get("connections", [])
     if not connections:
         return None
-    unresolved = [c.get("id", "unknown") for c in connections
-                  if c.get("source") not in known or c.get("target") not in known]
-    if unresolved:
-        return ValidationResult("CONNECTION-003", "ERROR", "ERROR",
-                                "One or more connections reference unknown interfaces.", unresolved,
-                                "Ensure connection endpoints reference defined interface IDs.")
+
+    problems: list[str] = []
+    for c in connections:
+        cid = c.get("id", "unknown")
+        src = c.get("source")
+        tgt = c.get("target")
+        if src not in known:
+            problems.append(f"{cid}.source='{src}' (not a defined interface)")
+        if tgt not in known:
+            problems.append(f"{cid}.target='{tgt}' (not a defined interface)")
+
+    if problems:
+        return ValidationResult(
+            "CONNECTION-003", "ERROR", "ERROR",
+            "One or more connections reference unknown interfaces.",
+            problems,
+            "Ensure connection endpoints reference defined interface IDs. "
+            f"Known interfaces: {sorted(known) if known else '[]'}",
+        )
     return ValidationResult("CONNECTION-003", "INFO", "PASS", "All connection endpoints reference defined interfaces.")
 
 

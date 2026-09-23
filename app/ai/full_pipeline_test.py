@@ -1,55 +1,94 @@
-import os
-import sys
-from app.ai.config import AIConfig
-from app.ai.converter import proposal_to_design
-from app.ai.health import check_model_available
-from app.ai.request import DesignRequest
-from app.ai.service import generate_design_proposal
-from app.core.engineering_rules import assess_design_status
+"""End-to-end pipeline test: prompt -> AI -> normalize -> validate -> repair."""
+
+import json
+from typing import Any
+
+from app.ai.prompt import build_design_prompt
+from app.ai.normalize import normalize_proposal
+from app.ai.repair import repair_proposal
 from app.core.validate_design import validate_design
+from app.ai.converter import proposal_to_design
+from app.ai.proposal import DesignProposal
 
 
-def main() -> int:
-    base_url = os.getenv("OPENBLUEPRINT_OLLAMA_URL", "http://127.0.0.1:11434")
-    model = os.getenv("OPENBLUEPRINT_MODEL", "qwen2.5:3b-instruct")
+def _status(r: Any) -> str:
+    return r["status"] if isinstance(r, dict) else getattr(r, "status", "")
 
-    # Fail fast with an actionable message instead of a raw connection
-    # traceback if Ollama isn't reachable or the model isn't pulled.
-    check = check_model_available(model, base_url)
-    if not check["ready"]:
-        print("=== OLLAMA PREFLIGHT CHECK FAILED ===")
-        print(check["message"])
-        return 1
 
-    request = DesignRequest(
-        prompt="Design a temperature monitoring system using a microcontroller, temperature sensor, local display, and 5V power supply.",
-        domain="embedded electronics",
-    )
+def _message(r: Any) -> str:
+    return r["message"] if isinstance(r, dict) else getattr(r, "message", str(r))
 
+
+def run_full_pipeline(description: str, provider, refinement_passes: int = 2):
+    # 1. Generate
+    prompt = build_design_prompt(description)
+    schema = DesignProposal.model_json_schema()
     try:
-        proposal = generate_design_proposal(
-            request, AIConfig(provider="ollama", model=model, refinement_passes=1)
-        )
-    except (RuntimeError, ValueError) as exc:
-        # Raised by OllamaProvider with a specific, actionable diagnosis.
-        print("=== PIPELINE FAILED ===")
-        print(str(exc))
-        return 1
+        response = provider.generate(prompt, response_schema=schema)
+    except TypeError:
+        # MockProvider doesn't accept response_schema
+        response = provider.generate(prompt)
+    raw = json.loads(response)
 
-    design = proposal_to_design(proposal, "qwen-test-001", "Temperature Monitoring System")
+    # 2. Normalize
+    raw = normalize_proposal(raw)
+
+    # 3. Convert + validate
+    proposal = DesignProposal.model_validate(raw)
+    design = proposal_to_design(proposal, design_id="DESIGN-1", name="Generated Design")
     results = validate_design(design)
-    status = assess_design_status(results)
-    print("=== MODEL ===\n", model)
-    print("=== PROPOSAL ===")
-    print(proposal.model_dump_json(indent=2))
-    print("\n=== DESIGN ===")
-    print(design.model_dump_json(indent=2))
-    print(f"\n=== READINESS: {status} ===")
-    print("\n=== VALIDATION ===")
-    for result in results:
-        print(result)
-    return 0
+    errors = [r for r in results if _status(r) == "ERROR"]
+
+    print(f"[pipeline] initial errors: {len(errors)}")
+
+    # 4. Repair loop
+    for attempt in range(1, refinement_passes + 1):
+        if not errors:
+            break
+        print(f"[repair] attempt {attempt}: {len(errors)} error(s)")
+        for e in errors:
+            print(f"         - {_message(e)}")
+        raw = repair_proposal(
+            raw,
+            [_message(e) for e in errors],
+            call_model=provider.generate,
+            parse_json=json.loads,
+        )
+        proposal = DesignProposal.model_validate(raw)
+        design = proposal_to_design(proposal, design_id="DESIGN-1", name="Generated Design")
+        results = validate_design(design)
+        errors = [r for r in results if _status(r) == "ERROR"]
+
+    return design, results
+
+
+def _print_report(results):
+    print("\n=== VALIDATION REPORT ===")
+    for r in results:
+        status = _status(r)
+        msg = _message(r)
+        marker = {
+            "PASS": "OK ",
+            "INFO": "OK ",
+            "WARNING": "!! ",
+            "INCOMPLETE": "~~ ",
+            "ERROR": "XX ",
+        }.get(status, "?  ")
+        print(f"  {marker}[{status}] {msg}")
+    print("=========================\n")
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    description = "Design a simple temperature monitoring system with a sensor and a display."
+
+    # --- STEP 1: mock provider (no AI) ---
+    from app.ai.mock_provider import MockProvider
+    print("Running with MockProvider...")
+    _, mock_results = run_full_pipeline(description, MockProvider())
+    _print_report(mock_results)
+
+    # --- STEP 2: real provider ---
+    from app.ai.ollama_provider import OllamaProvider
+    print("Running with OllamaProvider...")
+    _, real_results = run_full_pipeline(description, OllamaProvider())
+    _print_report(real_results)

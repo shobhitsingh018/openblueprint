@@ -1,24 +1,32 @@
-"""Structural guardrails for model proposals.
+"""AI-driven repair of invalid design proposals."""
 
-OpenBlueprint must never silently guess which interface a malformed connection
-was intended to use. Connection references are therefore validated rather than
-rewired. Interface synthesis is also avoided here; architecture stages must
-explicitly define functional interfaces.
-"""
+from __future__ import annotations
+from typing import Any, Callable
 
-from app.ai.proposal import DesignProposal
+from app.ai.prompt import build_repair_prompt
+from app.ai.normalize import normalize_proposal
 
 
-def repair_proposal(proposal: DesignProposal) -> DesignProposal:
-    known_interfaces = {i.id for c in proposal.components for i in c.interfaces}
-    invalid = []
-    for conn in proposal.connections:
-        for endpoint in (conn.source, conn.target):
-            if endpoint not in known_interfaces:
-                invalid.append(f"{conn.id}:{endpoint}")
-    if invalid:
-        raise ValueError(
-            "Proposal contains invalid connection endpoints; refusing to guess or rewire them: "
-            + ", ".join(invalid)
+def repair_proposal(
+    raw: dict,
+    errors: list[str],
+    call_model: Callable[[str], str],
+    parse_json: Callable[[str], dict],
+    max_attempts: int = 2,
+) -> dict:
+    """Feed validation errors back to the model until clean or exhausted."""
+    current = raw
+    for attempt in range(max_attempts):
+        if not errors:
+            break
+        prompt = build_repair_prompt(
+            raw_json=__import__("json").dumps(current, indent=2),
+            errors=errors,
         )
-    return proposal
+        try:
+            response = call_model(prompt)
+            parsed = parse_json(response)
+            current = normalize_proposal(parsed)
+        except Exception:
+            break
+    return current
