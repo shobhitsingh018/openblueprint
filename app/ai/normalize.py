@@ -118,6 +118,26 @@ def normalize_proposal(raw: dict) -> dict:
     if raw.get("status") not in ("PROPOSED", "APPROVED", "REJECTED", "APPLIED"):
         raw["status"] = "PROPOSED"
 
-    return raw
+        # --- Field-name remapping (AI drift) ---
+    # Requirements: `text` -> `description`
+    for req in raw["requirements"]:
+        if "description" not in req and "text" in req:
+            req["description"] = req.pop("text")
+        req.setdefault("description", "")
 
+    # Constraints: `text` -> `description`, ensure `name`
+    for cons in raw["constraints"]:
+        if "description" not in cons and "text" in cons:
+            cons["description"] = cons.pop("text")
+        cons.setdefault("description", "")
+        cons.setdefault("name", str(cons.get("id", "Constraint")))
+        cons.setdefault("severity", "ERROR")
+
+    # Components: ensure `category` exists
+    for comp in raw["components"]:
+        comp.setdefault("category", "unknown")
+
+    # Connections: ensure `name` exists
+    for conn in raw["connections"]:
+        conn.setdefault("name", "")
     return raw
